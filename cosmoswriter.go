@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -30,6 +31,7 @@ func NewCosmosWriter(db string, pw string) (*CosmosWriter, error) {
 
 	s, err := mgo.DialWithInfo(i)
 	if err != nil {
+
 		return nil, errors.Errorf("Can't connect to mongo, go error %v\n", err)
 	}
 	// SetSafe changes the session safety mode.
@@ -48,23 +50,14 @@ func NewCosmosWriter(db string, pw string) (*CosmosWriter, error) {
 	}, nil
 }
 
-func (w *CosmosWriter) write(record *Record, recordManager *RecordManager) error {
-	// Create a session which maintains a pool of socket connections
-	// to our MongoDB.
-
-	// Where do I do that?
-	//defer session.Close()
-
-	// fields, ok := record.Clean()
-	// if !ok {
-	// 	recordManager.skippedRecs.Add(1)
-	// 	return nil
-	// }
-
+func (w *CosmosWriter) write(record Record, recordManager *RecordManager) error {
 	cancel := make(chan error, 1)
 	go func() {
-		err := w.WriteToCosmos(record)
+		err := w.WriteToCosmos(&record)
+
+		recordManager.writtenRecords.Add(1)
 		if err != nil {
+			fmt.Printf("ERROR Inserting %s\n", err.Error())
 			select {
 			case cancel <- err:
 			}
@@ -77,10 +70,31 @@ func (w *CosmosWriter) write(record *Record, recordManager *RecordManager) error
 func (w *CosmosWriter) WriteToCosmos(rec *Record) error {
 	// insert documents into ToCosmoscollection
 
-	ride := rec.toRide()
-	err := w.collection.Insert(ride)
+	ride, err := rec.toRide()
 	if err != nil {
-		return errors.Wrap(err, "inserting ride")
+		return err
+	}
+
+	for i := 0; i < 10; i++ {
+		err = w.collection.Insert(ride)
+		if err != nil {
+			if strings.Contains(err.Error(), "Request rate is large") == true {
+				var j int
+				for j = 1; j <= i+1; j++ {
+					time.Sleep(100 * time.Millisecond)
+				}
+				fmt.Printf("Waiting %d00ms\n", j)
+			} else {
+				fmt.Println(err.Error(), ride)
+				return errors.Wrap(err, "inserting ride")
+			}
+		} else {
+			break
+		}
 	}
 	return nil
+}
+
+func (w *CosmosWriter) Close() {
+	w.session.Close()
 }

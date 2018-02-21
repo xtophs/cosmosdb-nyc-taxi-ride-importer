@@ -51,7 +51,7 @@ func (w *PilosaWriter) write(record *Record, recordManager *RecordManager) {
 		bms = w.yellowBms
 		cabType = 1
 	} else {
-		log.Println("unknown record type")
+		log.Println("unknown record type %v", record)
 		return
 	}
 

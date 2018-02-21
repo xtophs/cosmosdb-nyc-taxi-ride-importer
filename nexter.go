@@ -1,6 +1,8 @@
 package main
 
-import "sync"
+import (
+	"sync"
+)
 
 // Nexter generates unique sequential ids in a threadsafe way.
 type Nexter struct {
@@ -13,6 +15,7 @@ func (n *Nexter) Next() (nextID uint64) {
 	n.lock.Lock()
 	nextID = n.id
 	n.id++
+	//fmt.Printf("Next id %d\n", n.id)
 	n.lock.Unlock()
 	return
 }

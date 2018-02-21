@@ -1,10 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pkg/errors"
+	"gopkg.in/mgo.v2/bson"
 )
 
 var greenFields = map[string]int{
@@ -46,8 +50,8 @@ var yellowFields = map[string]int{
 	"mta_tax":               14,
 	"tip_amount":            15,
 	"tolls_amount":          16,
-	"total_amount":          17,
-	"improvement_surcharge": 18,
+	"total_amount":          18,
+	"improvement_surcharge": 17,
 }
 
 // Record records
@@ -56,39 +60,34 @@ type Record struct {
 	Val  string
 }
 
-type Ride2 struct {
-	vendorID string `bson:"vendor"`
-}
-
 // Ride rides
 type Ride struct {
-	//ID bson.ObjectId `bson:"_id"`
-	//	gridID          uint64    `bson:"grid_id,omitempty"`
-	VendorID        string    `bson:"vendor_id"`
-	SpeedMph        float64   `bson:"speed_mph"`
-	TotalDollars    float64   `bson:"total_amount_dollars"`
-	DurationMinutes float64   `bson:"duration_minutes"`
-	PassengerCount  int       `bson:"passenger_count"`
-	DistMiles       float64   `bson:"distance_miles"`
-	PickupTime      time.Time `bson:"pickup_time"`
-	PickupDay       int       `bson:"pickup_day"`
-	PickupMDay      int       `bson:"pickup_mday"`
-	PickupMonth     int       `bson:"pickup_month"`
-	PickupYear      int       `bson:"pickup_year"`
-	PickupLat       float64   `bson:"pickup_latitude"`
-	PickupLon       float64   `bson:"pickup_longitude"`
-	DropLat         float64   `bson:"drop_latitude"`
-	DropLon         float64   `bson:"drop_longitude"`
-	DropTime        time.Time `bson:"drop_time"`
-	DropDay         int       `bson:"drop_day"`
-	DropMDay        int       `bson:"drop_mday"`
-	DropMonth       int       `bson:"drop_month"`
-	DropYear        int       `bson"drop_year"`
+	ID              bson.ObjectId `bson:"_id"`
+	VendorID        string        `bson:"vendor_id"`
+	SpeedMph        float64       `bson:"speed_mph"`
+	TotalDollars    float64       `bson:"total_amount_dollars"`
+	DurationMinutes float64       `bson:"duration_minutes"`
+	PassengerCount  int           `bson:"passenger_count"`
+	DistMiles       float64       `bson:"distance_miles"`
+	PickupTime      *time.Time    `bson:"pickup_time"`
+	PickupDay       int           `bson:"pickup_day"`
+	PickupMDay      int           `bson:"pickup_mday"`
+	PickupMonth     int           `bson:"pickup_month"`
+	PickupYear      int           `bson:"pickup_year"`
+	PickupLat       float64       `bson:"pickup_latitude"`
+	PickupLon       float64       `bson:"pickup_longitude"`
+	DropLat         float64       `bson:"drop_latitude"`
+	DropLon         float64       `bson:"drop_longitude"`
+	DropTime        *time.Time    `bson:"drop_time"`
+	DropDay         int           `bson:"drop_day"`
+	DropMDay        int           `bson:"drop_mday"`
+	DropMonth       int           `bson:"drop_month"`
+	DropYear        int           `bson:"drop_year"`
+	CabType         int           `bson:"cab_type"`
 	//pickupGridID    uint64    `bson:"pickup_grid_id, omitempty"`
 	//dropGridID      uint64    `bson:"drop_grid_id, omitempty"`
 	//pickupElevation float64   `bson:"pickup_elevation, omitempty"`
 	//dropElevation   float64   `bson:"drop_elevation, omitempty"`
-	CabType int `bson:"cab_type"`
 }
 
 func (r *Record) Clean() ([]string, bool) {
@@ -99,89 +98,186 @@ func (r *Record) Clean() ([]string, bool) {
 	return fields, true
 }
 
-func (r *Record) toRide() *Ride {
+func parseDate(datetime string) (*time.Time, error) {
+	dateFormat := "2006-01-02 15:04:05"
+
+	if len(datetime) == 0 {
+		log.Printf("time was empty")
+		return nil, fmt.Errorf("Can't parse empty date")
+	}
+
+	t, err := time.Parse(dateFormat, datetime)
+	if err != nil {
+		log.Printf("Error parsing date %s\n", err.Error())
+		return nil, err
+	}
+
+	return &t, nil
+}
+
+func (r *Record) safeParseDateField(fieldName string, fields []string) (t *time.Time, err error) {
+
+	var fieldNames map[string]int
+	var tm time.Time
+	dateFormat := "2006-01-02 15:04:05"
+
+	if r.Type == 'g' {
+		fieldNames = greenFields
+	} else if r.Type == 'y' {
+		fieldNames = yellowFields
+	} else {
+		return nil, fmt.Errorf("Bad Record Type %v", r.Type)
+	}
+
+	if fieldNames[fieldName] < len(fields) {
+		if len(fields[fieldNames[fieldName]]) == 0 {
+			return nil, fmt.Errorf("Empty record for %s", fieldName)
+		}
+		tm, err = time.Parse(dateFormat, fields[fieldNames[fieldName]])
+		if err != nil {
+			return nil, errors.Wrap(err, fmt.Sprintf("Error parsing %s", fieldName))
+		}
+	} else {
+		return nil, fmt.Errorf("Bad index %d for field %s, max Index %d", fieldNames[fieldName], fieldName, len(fields))
+	}
+
+	return &tm, nil
+}
+
+func (r *Record) safeParseIntegerField(fieldName string, fields []string) (i int, err error) {
+
+	var fieldNames map[string]int
+
+	if r.Type == 'g' {
+		fieldNames = greenFields
+	} else if r.Type == 'y' {
+		fieldNames = yellowFields
+	} else {
+		return -1, fmt.Errorf("Bad Record Type %v", r.Type)
+	}
+
+	if fieldNames[fieldName] < len(fields) {
+		if len(fields[fieldNames[fieldName]]) == 0 {
+			return -1, fmt.Errorf("Empty record for %s", fieldName)
+		}
+		i, err = strconv.Atoi(fields[fieldNames[fieldName]])
+		if err != nil {
+			return -1, errors.Wrap(err, fmt.Sprintf("Error parsing %s", fieldName))
+		}
+	} else {
+		return -1, fmt.Errorf("Bad index %d for field %s, max Index %d", fieldNames[fieldName], fieldName, len(fields))
+	}
+
+	return i, nil
+}
+
+func (r *Record) safeParseFloatField(fieldName string, fields []string) (f float64, err error) {
+
+	var fieldNames map[string]int
+
+	if r.Type == 'g' {
+		fieldNames = greenFields
+	} else if r.Type == 'y' {
+		fieldNames = yellowFields
+	} else {
+		return -1, fmt.Errorf("Bad Record Type %v", r.Type)
+	}
+
+	if fieldNames[fieldName] < len(fields) {
+		if len(fields[fieldNames[fieldName]]) == 0 {
+			return -1, fmt.Errorf("Empty record for %s, %d, %v", fieldName, fieldNames[fieldName], fields)
+		}
+		f, err = strconv.ParseFloat(fields[fieldNames[fieldName]], 64)
+		if err != nil {
+			return -1, errors.Wrap(err, fmt.Sprintf("Error parsing %s", fieldName))
+		}
+	} else {
+		return -1, fmt.Errorf("Bad index %d for field %s, max Index %d", fieldNames[fieldName], fieldName, len(fields))
+	}
+
+	return f, nil
+}
+
+func (r *Record) toRide() (ride *Ride, err error) {
 	fields, _ := r.Clean()
 
-	ride := &Ride{}
+	ride = &Ride{}
 
-	//ride.ID = bson.NewObjectId()
-	// TODO: Find more elegant way to do this
+	ride.ID = bson.NewObjectId()
 	if r.Type == 'g' {
 		ride.CabType = 0
 
-		// "vendor_id":          0,
-		// "pickup_datetime":    1,
-		// "dropoff_datetime":   2,
-		// "passenger_count":    9,
-		// "trip_distance":      10,
-		// "pickup_longitude":   5,
-		// "pickup_latitude":    6,
-		// "dropoff_longitude":  7,
-		// "dropoff_latitude":   8,
-		// "total_amount":       17,
-
-		// pilosa smaple does not include
-		// store_and_fwd_flag
-		// ratecode_id
-		// payment_type
-		// fare_amount
-		// extra
-		// mta_tax
-		// tip_amount
-		// tolls_amount
-		// improvement_surcharge
-
-		// 2013-08-01 08:14:37
-		// TODO Errors
-		ride.VendorID = fields[greenFields["vendor_id"]]
-		ride.PickupTime, _ = time.Parse("2013-08-01 08:14:37", fields[greenFields["pickup_datetime"]])
-		ride.PickupDay = ride.PickupTime.Day()
-		ride.PickupMonth = int(ride.PickupTime.Month())
-		ride.PickupYear = ride.PickupTime.Year()
-		ride.DropTime, _ = time.Parse("2013-08-01 08:14:37", fields[greenFields["dropoff_datetime"]])
-		ride.DropDay = ride.DropTime.Day()
-		ride.DropMonth = int(ride.DropTime.Month())
-		ride.DropYear = ride.DropTime.Year()
-		ride.PassengerCount, _ = strconv.Atoi(fields[greenFields["passenger_count"]])
-		ride.DistMiles, _ = strconv.ParseFloat(fields[greenFields["trip_distance"]], 64)
-		ride.PickupLat, _ = strconv.ParseFloat(fields[greenFields["pickup_latitude"]], 64)
-		ride.PickupLon, _ = strconv.ParseFloat(fields[greenFields["pickup_longitude"]], 64)
-		ride.DropLat, _ = strconv.ParseFloat(fields[greenFields["dropoff_latitude"]], 64)
-		ride.DropLon, _ = strconv.ParseFloat(fields[greenFields["dropoff_longitude"]], 64)
-
-		ride.SpeedMph = ride.DistMiles / ride.DropTime.Sub(ride.PickupTime).Hours()
-
-		ride.TotalDollars, _ = strconv.ParseFloat(fields[greenFields["total_amount"]], 64)
-		ride.DurationMinutes = ride.DropTime.Sub(ride.PickupTime).Minutes()
-
 	} else if r.Type == 'y' {
 		ride.CabType = 1
-		// TODO Errors
-		ride.VendorID = fields[yellowFields["vendor_id"]]
-		ride.PickupTime, _ = time.Parse("2013-08-01 08:14:37", fields[yellowFields["pickup_datetime"]])
-		ride.PickupDay = ride.PickupTime.Day()
-		ride.PickupMonth = int(ride.PickupTime.Month())
-		ride.PickupYear = ride.PickupTime.Year()
-		ride.DropTime, _ = time.Parse("2013-08-01 08:14:37", fields[yellowFields["dropoff_datetime"]])
-		ride.DropDay = ride.DropTime.Day()
-		ride.DropMonth = int(ride.DropTime.Month())
-		ride.DropYear = ride.DropTime.Year()
-		ride.PassengerCount, _ = strconv.Atoi(fields[yellowFields["passenger_count"]])
-		ride.DistMiles, _ = strconv.ParseFloat(fields[yellowFields["trip_distance"]], 64)
-		ride.PickupLat, _ = strconv.ParseFloat(fields[yellowFields["pickup_latitude"]], 64)
-		ride.PickupLon, _ = strconv.ParseFloat(fields[yellowFields["pickup_longitude"]], 64)
-		ride.DropLat, _ = strconv.ParseFloat(fields[yellowFields["dropoff_latitude"]], 64)
-		ride.DropLon, _ = strconv.ParseFloat(fields[yellowFields["dropoff_longitude"]], 64)
-
-		ride.SpeedMph = ride.DistMiles / ride.DropTime.Sub(ride.PickupTime).Hours()
-
-		ride.TotalDollars, _ = strconv.ParseFloat(fields[yellowFields["total_amount"]], 64)
-		ride.DurationMinutes = ride.DropTime.Sub(ride.PickupTime).Minutes()
-
 	} else {
-		log.Println("unknown record type")
-		return nil
+		log.Printf("unknown record type, %v\n", r)
+		return nil, nil
 	}
 
-	return ride
+	// pilosa smaple does not include
+	// store_and_fwd_flag
+	// ratecode_id
+	// payment_type
+	// fare_amount
+	// extra
+	// mta_tax
+	// tip_amount
+	// tolls_amount
+	// improvement_surcharge
+	// TODO Errors
+	ride.VendorID = fields[greenFields["vendor_id"]]
+
+	ride.PickupTime, err = r.safeParseDateField("pickup_datetime", fields)
+	if err != nil {
+		return nil, err
+	}
+	ride.PickupDay = ride.PickupTime.Day()
+	ride.PickupMonth = int(ride.PickupTime.Month())
+	ride.PickupYear = ride.PickupTime.Year()
+	ride.DropTime, err = r.safeParseDateField("dropoff_datetime", fields)
+	if err != nil {
+		return nil, err
+	}
+	ride.DropDay = ride.DropTime.Day()
+	ride.DropMonth = int(ride.DropTime.Month())
+	ride.DropYear = ride.DropTime.Year()
+	ride.PassengerCount, err = r.safeParseIntegerField("passenger_count", fields)
+	if err != nil {
+		return nil, err
+	}
+
+	ride.DistMiles, err = r.safeParseFloatField("trip_distance", fields)
+	if err != nil {
+		return nil, err
+	}
+
+	ride.PickupLat, err = r.safeParseFloatField("pickup_latitude", fields)
+	if err != nil {
+		return nil, err
+	}
+
+	ride.PickupLon, err = r.safeParseFloatField("pickup_longitude", fields)
+	if err != nil {
+		return nil, err
+	}
+
+	ride.DropLat, err = r.safeParseFloatField("dropoff_latitude", fields)
+	if err != nil {
+		return nil, err
+	}
+
+	ride.DropLon, err = r.safeParseFloatField("dropoff_longitude", fields)
+	if err != nil {
+		return nil, err
+	}
+
+	ride.SpeedMph = ride.DistMiles / ride.DropTime.Sub(*ride.PickupTime).Hours()
+	ride.TotalDollars, err = r.safeParseFloatField("total_amount", fields)
+	if err != nil {
+		return nil, err
+	}
+
+	ride.DurationMinutes = ride.DropTime.Sub(*ride.PickupTime).Minutes()
+
+	return ride, nil
 }

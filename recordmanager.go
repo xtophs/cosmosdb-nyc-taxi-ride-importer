@@ -9,9 +9,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/pilosa/pdk"
 )
@@ -23,36 +25,49 @@ type RecordManager struct {
 	bytesLock  sync.Mutex
 	nexter     *Nexter
 
-	totalRecs     *Counter
-	skippedRecs   *Counter
-	nullLocs      *Counter
-	badLocs       *Counter
-	badSpeeds     *Counter
-	badTotalAmnts *Counter
-	badDurations  *Counter
-	badPassCounts *Counter
-	badDist       *Counter
-	badUnknowns   *Counter
+	totalRecs      *Counter
+	skippedRecs    *Counter
+	nullLocs       *Counter
+	badLocs        *Counter
+	badSpeeds      *Counter
+	badTotalAmnts  *Counter
+	badDurations   *Counter
+	badPassCounts  *Counter
+	badDist        *Counter
+	badUnknowns    *Counter
+	readRecords    *Counter
+	writtenRecords *Counter
 }
 
 //NewRecordManager returns a new RecordManager
 func NewRecordManager() *RecordManager {
 	return &RecordManager{
 		UseReadAll: false,
-		nexter:     &Nexter{},
+		nexter:     &Nexter{id: 0},
 
-		totalRecs:     &Counter{},
-		skippedRecs:   &Counter{},
-		nullLocs:      &Counter{},
-		badLocs:       &Counter{},
-		badSpeeds:     &Counter{},
-		badTotalAmnts: &Counter{},
-		badDurations:  &Counter{},
-		badPassCounts: &Counter{},
-		badDist:       &Counter{},
-		badUnknowns:   &Counter{},
+		totalRecs:      &Counter{},
+		skippedRecs:    &Counter{},
+		nullLocs:       &Counter{},
+		badLocs:        &Counter{},
+		badSpeeds:      &Counter{},
+		badTotalAmnts:  &Counter{},
+		badDurations:   &Counter{},
+		badPassCounts:  &Counter{},
+		badDist:        &Counter{},
+		badUnknowns:    &Counter{},
+		readRecords:    &Counter{},
+		writtenRecords: &Counter{},
 	}
 
+}
+
+func stringCopy(s string) string {
+	var b []byte
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+	h.Data = (*reflect.StringHeader)(unsafe.Pointer(&s)).Data
+	h.Len = len(s)
+	h.Cap = len(s)
+	return string(b)
 }
 
 func (f *RecordManager) fetch(urls <-chan string, records chan<- Record) {
@@ -134,7 +149,7 @@ func (f *RecordManager) fetch(urls <-chan string, records chan<- Record) {
 				}
 				record = record[:lastcomma] + "," + record[lastcomma:]
 			}
-			fmt.Printf("read record %s\n", record)
+			f.readRecords.Add(1)
 			records <- Record{Val: record, Type: typ}
 		}
 		fmt.Println("done scanning")
@@ -182,6 +197,7 @@ func (m *RecordManager) printStats() *time.Ticker {
 			duration := time.Since(start)
 			bytes := m.BytesProcessed()
 			log.Printf("Rides: %d, Bytes: %s, Records: %v, Duration: %v, Rate: %v/s", m.nexter.Last(), pdk.Bytes(bytes), m.totalRecs.Get(), duration, pdk.Bytes(float64(bytes)/duration.Seconds()))
+			log.Printf("Read: %d, Written: %d", m.readRecords.Get(), m.writtenRecords.Get())
 			log.Printf("Skipped: %v, badLocs: %v, nullLocs: %v, badSpeeds: %v, badTotalAmnts: %v, badDurations: %v, badUnknowns: %v, badPassCounts: %v, badDist: %v", m.skippedRecs.Get(), m.badLocs.Get(), m.nullLocs.Get(), m.badSpeeds.Get(), m.badTotalAmnts.Get(), m.badDurations.Get(), m.badUnknowns.Get(), m.badPassCounts.Get(), m.badDist.Get())
 		}
 	}()

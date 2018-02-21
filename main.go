@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"time"
 
 	_ "net/http/pprof"
 
@@ -25,7 +26,7 @@ use case implementation
 
 func main() {
 	m := NewMain()
-	m.URLFile = "urls-short.txt"
+	m.URLFile = "yellow1.txt"
 	err := m.Run()
 	if err != nil {
 		log.Fatal(err)
@@ -75,7 +76,7 @@ func (m *Main) Run() error {
 	ticker := m.recordManager.printStats()
 
 	urls := make(chan string, 100)
-	records := make(chan Record, 10000)
+	records := make(chan Record, 20000)
 
 	go func() {
 		for _, url := range m.urls {
@@ -95,7 +96,10 @@ func (m *Main) Run() error {
 
 	var wg sync.WaitGroup
 
-	importer := NewCosmosImporter()
+	importer, err := NewCosmosImporter(m.recordManager)
+	if err != nil {
+		log.Panicf("Can't Open Importer: %s", err.Error())
+	}
 
 	for i := 0; i < m.FetchConcurrency; i++ {
 		wg.Add(1)
@@ -116,8 +120,7 @@ func (m *Main) Run() error {
 	close(records)
 	wg2.Wait()
 
-	// TODO: Close the writer
-	//m.importer.Close()
+	time.Sleep(30 * time.Second)
 	ticker.Stop()
 	return err
 }

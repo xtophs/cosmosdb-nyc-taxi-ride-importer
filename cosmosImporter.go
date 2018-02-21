@@ -16,13 +16,20 @@ type TaxiImporter interface {
 // CosmosImporter struct
 type CosmosImporter struct {
 	manager *RecordManager
+	writer  *CosmosWriter
 }
 
 // NewCosmosImporter returns an initialized TaxiImporter interface
-func NewCosmosImporter() TaxiImporter {
-	return &CosmosImporter{
-		manager: NewRecordManager(),
+func NewCosmosImporter(r *RecordManager) (TaxiImporter, error) {
+
+	w, err := NewCosmosWriter(utils.GetEnvVarOrExit("AZURE_DATABASE"), utils.GetEnvVarOrExit("AZURE_DATABASE_PASSWORD"))
+	if err != nil {
+		return nil, err
 	}
+	return &CosmosImporter{
+		manager: r,
+		writer:  w,
+	}, nil
 }
 
 func (i *CosmosImporter) fetch(urls <-chan string, records chan<- Record) {
@@ -34,22 +41,21 @@ func (i *CosmosImporter) fetch(urls <-chan string, records chan<- Record) {
 func (i *CosmosImporter) parse(records <-chan Record) {
 
 	// TODO: add concurrency again
-	writer, err := NewCosmosWriter(utils.GetEnvVarOrExit("AZURE_DATABASE"), utils.GetEnvVarOrExit("AZURE_DATABASE_PASSWORD"))
-	if err != nil {
-		log.Println("Could not craete Cosmos writer")
-		return
-	}
 	start := time.Now()
 
 	for record := range records {
-		if record.Type != 'g' && record.Type == 'y' {
-			log.Println("unknown record type")
+		i.manager.nexter.Next()
+		if record.Type != 'g' && record.Type != 'y' {
+			log.Printf("unknown record type %d, %v", record.Type, record)
 			i.manager.badUnknowns.Add(1)
 			i.manager.skippedRecs.Add(1)
-			continue
+		} else {
+			i.writer.write(record, i.manager)
 		}
-		writer.write(&record, i.manager)
-		i.manager.printStats()
 	}
 	log.Printf("writing %v docs took %v\n", len(records), time.Since(start))
+}
+
+func (i *CosmosImporter) close() {
+	i.writer.Close()
 }
